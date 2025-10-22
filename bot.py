@@ -140,20 +140,20 @@ async def on_callbacks(cq: CallbackQuery):
         return
 
     if action == "cancel":
-        try:
-            await cq.message.edit_text("Выбор отменён.")
-            if DELETE_KEYBOARD and s.keyboard_msg_id:
-    await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
-        except Exception:
-            pass
-        sessions.pop(origin_id, None)
-        await cq.answer("Отменено.")
-        return
+    try:
+        await cq.message.edit_text("Выбор отменён.")
+        if DELETE_KEYBOARD and s.keyboard_msg_id:   # ← двоеточие здесь
+            await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
+    except Exception:
+        pass
+    sessions.pop(origin_id, None)
+    await cq.answer("Отменено.")
+    return
 
-        if action == "done":
+if action == "done":
     # публикуем итог
     caption = caption_for(s)
-    await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
+    await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)  # ← photo=
 
     # аккуратно прибираем следы
     if DELETE_KEYBOARD and s.keyboard_msg_id:
@@ -171,6 +171,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
