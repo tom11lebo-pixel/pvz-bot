@@ -1,4 +1,5 @@
 # bot.py
+import os
 import asyncio
 from dataclasses import dataclass, field
 from typing import Optional, Set
@@ -10,29 +11,23 @@ from aiogram.types import (
     InlineKeyboardButton, ContentType
 )
 
-import os
 TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise RuntimeError("Environment variable TOKEN is not set. Add it in Render -> Environment.")
 
-# наверху bot.py рядом с PVZ_LIST
-DELETE_ORIGINAL = True     # удалять исходное фото пользователя
-DELETE_KEYBOARD = True     # удалять сообщение с клавиатурой после "Готово"
+# --- настройки удаления ---
+DELETE_ORIGINAL = True   # удалять исходное фото пользователя
+DELETE_KEYBOARD = True   # удалять сообщение с клавиатурой
 
-async def safe_delete(bot, chat_id: int, message_id: int):
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception:
-        # нет прав / личка / слишком старое сообщение — просто игнорируем
-        pass
-        
-# === Ваши ПВЗ ===
+# --- список ПВЗ ---
 PVZ_LIST = [
     "Яхромская 3",
     "Учинская 3 к1",
     "Лобненская 4",
     "Яхромская 2",
-    "Дм шоссе 103",
-    "Дм шоссе 107 к2",
-    "Дм шоссе 127 к1",
+    "Дмит ш 103",
+    "Дмит ш 107 к2",
+    "Дмит ш 127 к1",
     "С Ковалевской 8",
 ]
 
@@ -55,12 +50,13 @@ def build_keyboard(s: SelectSession) -> InlineKeyboardMarkup:
         text = f"{checked} {name}"
         row.append(InlineKeyboardButton(text=text, callback_data=f"sel:{i}:{s.origin_msg_id}"))
         if len(row) == 2:
-            rows.append(row); row = []
+            rows.append(row)
+            row = []
     if row:
         rows.append(row)
     rows.append([
         InlineKeyboardButton(text="✅ Готово", callback_data=f"done:{s.origin_msg_id}"),
-        InlineKeyboardButton(text="✖ Отмена", callback_data=f"cancel:{s.origin_msg_id}")
+        InlineKeyboardButton(text="✖ Отмена", callback_data=f"cancel:{s.origin_msg_id}"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -70,12 +66,18 @@ def caption_for(s: SelectSession) -> str:
     items = [PVZ_LIST[i] for i in sorted(s.selected)]
     return "Относится к ПВЗ:\n• " + "\n• ".join(items)
 
+async def safe_delete(bot: Bot, chat_id: int, message_id: int):
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
 dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start(m: Message):
     await m.reply(
-        "Кидайте фото/QR — выберите один или несколько ПВЗ и нажмите «Готово».\n"
+        "Кидайте фото/QR — выберите один или несколько ПВЗ и нажмите «Готово». "
         "Бот опубликует ту же картинку с подписью адресов."
     )
 
@@ -100,7 +102,7 @@ async def on_image(m: Message):
     sessions[m.message_id] = s
     sent = await m.reply(
         "Выберите один или несколько ПВЗ, затем нажмите «Готово».",
-        reply_markup=build_keyboard(s)
+        reply_markup=build_keyboard(s),
     )
     s.keyboard_msg_id = sent.message_id
 
@@ -122,12 +124,11 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer("Сессия не найдена (время истекло или завершена).", show_alert=True)
         return
 
-    # Проверка: только отправитель может выбирать адреса
+    # Только автор исходного изображения может выбирать
     if cq.from_user.id != s.sender_id:
         await cq.answer("Только отправитель может выбирать адреса.", show_alert=True)
         return
 
-    # Выбор ПВЗ
     if action == "sel":
         idx = int(idx_str)
         if idx < 0 or idx >= len(PVZ_LIST):
@@ -141,7 +142,6 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer()
         return
 
-    # Отмена выбора
     if action == "cancel":
         try:
             await cq.message.edit_text("Выбор отменён.")
@@ -153,13 +153,10 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer("Отменено.")
         return
 
-    # Завершение выбора
     if action == "done":
-        # публикуем итоговое фото
         caption = caption_for(s)
         await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
 
-        # удаляем оригиналы (если разрешено)
         if DELETE_KEYBOARD and s.keyboard_msg_id:
             await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
         if DELETE_ORIGINAL:
@@ -175,9 +172,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
-
-
