@@ -122,11 +122,12 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer("Сессия не найдена (время истекло или завершена).", show_alert=True)
         return
 
-    # Только автор исходного изображения может выбирать
+    # Проверка: только отправитель может выбирать адреса
     if cq.from_user.id != s.sender_id:
         await cq.answer("Только отправитель может выбирать адреса.", show_alert=True)
         return
 
+    # Выбор ПВЗ
     if action == "sel":
         idx = int(idx_str)
         if idx < 0 or idx >= len(PVZ_LIST):
@@ -140,6 +141,7 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer()
         return
 
+    # Отмена выбора
     if action == "cancel":
         try:
             await cq.message.edit_text("Выбор отменён.")
@@ -151,12 +153,13 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer("Отменено.")
         return
 
+    # Завершение выбора
     if action == "done":
-        # публикуем итог
+        # публикуем итоговое фото
         caption = caption_for(s)
         await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
 
-        # аккуратно прибираем следы
+        # удаляем оригиналы (если разрешено)
         if DELETE_KEYBOARD and s.keyboard_msg_id:
             await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
         if DELETE_ORIGINAL:
@@ -172,6 +175,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
