@@ -11,7 +11,7 @@ from aiogram.types import (
 )
 
 import os
-TOKEN = os.getenv("8325955458:AAEiP2EmIGifG4tqgEW2senis6mFB8TUyAU")
+TOKEN = os.getenv("TOKEN")
 
 # === Ваши ПВЗ ===
 PVZ_LIST = [
@@ -153,3 +153,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
