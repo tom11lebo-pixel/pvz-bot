@@ -122,6 +122,7 @@ async def on_callbacks(cq: CallbackQuery):
         await cq.answer("Сессия не найдена (время истекло или завершена).", show_alert=True)
         return
 
+    # Только автор исходного изображения может выбирать
     if cq.from_user.id != s.sender_id:
         await cq.answer("Только отправитель может выбирать адреса.", show_alert=True)
         return
@@ -140,30 +141,30 @@ async def on_callbacks(cq: CallbackQuery):
         return
 
     if action == "cancel":
-    try:
-        await cq.message.edit_text("Выбор отменён.")
-        if DELETE_KEYBOARD and s.keyboard_msg_id:   # ← двоеточие здесь
+        try:
+            await cq.message.edit_text("Выбор отменён.")
+            if DELETE_KEYBOARD and s.keyboard_msg_id:
+                await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
+        except Exception:
+            pass
+        sessions.pop(origin_id, None)
+        await cq.answer("Отменено.")
+        return
+
+    if action == "done":
+        # публикуем итог
+        caption = caption_for(s)
+        await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
+
+        # аккуратно прибираем следы
+        if DELETE_KEYBOARD and s.keyboard_msg_id:
             await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
-    except Exception:
-        pass
-    sessions.pop(origin_id, None)
-    await cq.answer("Отменено.")
-    return
+        if DELETE_ORIGINAL:
+            await safe_delete(cq.bot, s.chat_id, s.origin_msg_id)
 
-if action == "done":
-    # публикуем итог
-    caption = caption_for(s)
-    await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)  # ← photo=
-
-    # аккуратно прибираем следы
-    if DELETE_KEYBOARD and s.keyboard_msg_id:
-        await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
-    if DELETE_ORIGINAL:
-        await safe_delete(cq.bot, s.chat_id, s.origin_msg_id)
-
-    sessions.pop(origin_id, None)
-    await cq.answer("Опубликовано.")
-    return
+        sessions.pop(origin_id, None)
+        await cq.answer("Опубликовано.")
+        return
 
 async def main():
     bot = Bot(TOKEN)
@@ -171,6 +172,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
