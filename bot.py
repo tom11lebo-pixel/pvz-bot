@@ -13,6 +13,17 @@ from aiogram.types import (
 import os
 TOKEN = os.getenv("TOKEN")
 
+# наверху bot.py рядом с PVZ_LIST
+DELETE_ORIGINAL = True     # удалять исходное фото пользователя
+DELETE_KEYBOARD = True     # удалять сообщение с клавиатурой после "Готово"
+
+async def safe_delete(bot, chat_id: int, message_id: int):
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        # нет прав / личка / слишком старое сообщение — просто игнорируем
+        pass
+        
 # === Ваши ПВЗ ===
 PVZ_LIST = [
     "Яхромская 3",
@@ -131,21 +142,28 @@ async def on_callbacks(cq: CallbackQuery):
     if action == "cancel":
         try:
             await cq.message.edit_text("Выбор отменён.")
+            if DELETE_KEYBOARD and s.keyboard_msg_id:
+    await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
         except Exception:
             pass
         sessions.pop(origin_id, None)
         await cq.answer("Отменено.")
         return
 
-    if action == "done":
-        await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption_for(s))
-        try:
-            await cq.message.edit_text("Готово. Публикация отправлена.")
-        except Exception:
-            pass
-        sessions.pop(origin_id, None)
-        await cq.answer("Опубликовано.")
-        return
+        if action == "done":
+    # публикуем итог
+    caption = caption_for(s)
+    await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
+
+    # аккуратно прибираем следы
+    if DELETE_KEYBOARD and s.keyboard_msg_id:
+        await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
+    if DELETE_ORIGINAL:
+        await safe_delete(cq.bot, s.chat_id, s.origin_msg_id)
+
+    sessions.pop(origin_id, None)
+    await cq.answer("Опубликовано.")
+    return
 
 async def main():
     bot = Bot(TOKEN)
@@ -153,5 +171,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
