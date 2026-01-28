@@ -14,9 +14,6 @@ from aiogram.types import (
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise RuntimeError("Environment variable TOKEN is not set. Add it in Render -> Environment.")
-@dp.message(F.text.startswith("/getid"))
-async def get_chat_id(message: Message):
-    await message.reply(f"Chat ID: {message.chat.id}")
 
 # --- настройки удаления ---
 DELETE_ORIGINAL = True   # удалять исходное фото пользователя
@@ -177,6 +174,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
