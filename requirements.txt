@@ -1,2 +1,3 @@
 aiogram==3.*
-pillow
+gspread
+google-auth
