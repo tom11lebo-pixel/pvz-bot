@@ -42,9 +42,20 @@ PVZ_LIST = [
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
-creds = Credentials.from_service_account_file(
-    "google_credentials.json", scopes=SCOPES
+import json
+from google.oauth2.service_account import Credentials
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+google_creds_json = os.getenv("GOOGLE_CREDS_JSON")
+if not google_creds_json:
+    raise RuntimeError("GOOGLE_CREDS_JSON not set in environment")
+
+creds = Credentials.from_service_account_info(
+    json.loads(google_creds_json),
+    scopes=SCOPES
 )
+
 gs = gspread.authorize(creds)
 sheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 
@@ -209,3 +220,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
