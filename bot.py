@@ -1,25 +1,31 @@
 # bot.py
 import os
 import asyncio
-from dataclasses import dataclass, field
-from typing import Optional, Set
+from dataclasses import dataclass
+from typing import Dict
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup,
-    InlineKeyboardButton, ContentType
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ContentType
 )
+
+# ===== НАСТРОЙКИ =====
 
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise RuntimeError("Environment variable TOKEN is not set. Add it in Render -> Environment.")
+    raise RuntimeError("Переменная окружения TOKEN не задана")
 
-# --- настройки удаления ---
-DELETE_ORIGINAL = True   # удалять исходное фото пользователя
-DELETE_KEYBOARD = True   # удалять сообщение с клавиатурой
+# 👉 сюда потом вставишь chat_id группы Возвраты
+RETURNS_CHAT_ID = -1002768922543  # например: -1001234567890
 
-# --- список ПВЗ ---
+DELETE_ORIGINAL_PHOTO = True
+DELETE_KEYBOARD_MESSAGE = True
+
 PVZ_LIST = [
     "Яхромская 3",
     "Яхромская 2",
@@ -33,149 +39,116 @@ PVZ_LIST = [
     "С Ковалевской 8",
 ]
 
+# ===== ХРАНИЛИЩЕ СОСТОЯНИЯ (ПРОСТО И НАДЁЖНО) =====
+
 @dataclass
-class SelectSession:
-    chat_id: int
-    origin_msg_id: int
-    file_id: str
-    sender_id: int
-    selected: Set[int] = field(default_factory=set)
-    keyboard_msg_id: Optional[int] = None
+class SupplierState:
+    name: str | None = None
+    last_photo_id: str | None = None
 
-sessions: dict[int, SelectSession] = {}  # key = origin_msg_id
+suppliers: Dict[int, SupplierState] = {}
 
-def build_keyboard(s: SelectSession) -> InlineKeyboardMarkup:
-    rows = []
-    row = []
-    for i, name in enumerate(PVZ_LIST):
-        checked = "☑" if i in s.selected else "☐"
-        text = f"{checked} {name}"
-        row.append(InlineKeyboardButton(text=text, callback_data=f"sel:{i}:{s.origin_msg_id}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([
-        InlineKeyboardButton(text="✅ Готово", callback_data=f"done:{s.origin_msg_id}"),
-        InlineKeyboardButton(text="✖ Отмена", callback_data=f"cancel:{s.origin_msg_id}"),
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+# ===== ИНИЦИАЛИЗАЦИЯ =====
 
-def caption_for(s: SelectSession) -> str:
-    if not s.selected:
-        return "Относится к ПВЗ: (не выбрано)"
-    items = [PVZ_LIST[i] for i in sorted(s.selected)]
-    return "Относится к ПВЗ:\n• " + "\n• ".join(items)
-
-async def safe_delete(bot: Bot, chat_id: int, message_id: int):
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception:
-        pass
-
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# ===== КОМАНДЫ =====
+
+@dp.message(F.text.startswith("/getid"))
+async def get_chat_id(message: Message):
+    await message.reply(f"Chat ID: {message.chat.id}")
+
 @dp.message(Command("start"))
-async def start(m: Message):
-    await m.reply(
-        "Кидайте фото/QR — выберите один или несколько ПВЗ и нажмите «Готово». "
-        "Бот опубликует ту же картинку с подписью адресов."
+async def start(message: Message):
+    suppliers[message.from_user.id] = SupplierState()
+    await message.answer(
+        "Привет 👋\n\n"
+        "Напиши, пожалуйста, *название твоего ИП* одним сообщением.",
+        parse_mode="Markdown"
     )
 
-@dp.message(F.content_type.in_({ContentType.PHOTO, ContentType.DOCUMENT}))
-async def on_image(m: Message):
-    file_id = None
-    if m.photo:
-        file_id = m.photo[-1].file_id
-    elif m.document and (m.document.mime_type or "").startswith("image/"):
-        file_id = m.document.file_id
+# ===== ПОЛУЧЕНИЕ ИМЕНИ ПОСТАВЩИКА =====
 
-    if not file_id:
-        await m.reply("Это не похоже на изображение. Пришлите фото или картинку.")
+@dp.message(F.text & ~F.text.startswith("/"))
+async def set_supplier_name(message: Message):
+    state = suppliers.get(message.from_user.id)
+    if not state:
         return
 
-    s = SelectSession(
-        chat_id=m.chat.id,
-        origin_msg_id=m.message_id,
-        file_id=file_id,
-        sender_id=m.from_user.id if m.from_user else 0,
+    if state.name is None:
+        state.name = message.text.strip()
+        await message.answer(
+            f"Отлично, *{state.name}* ✅\n\n"
+            "Теперь отправь фото ШК возврата.",
+            parse_mode="Markdown"
+        )
+
+# ===== ПОЛУЧЕНИЕ ФОТО =====
+
+@dp.message(F.content_type == ContentType.PHOTO)
+async def handle_photo(message: Message):
+    user_id = message.from_user.id
+    state = suppliers.get(user_id)
+
+    if not state or not state.name:
+        await message.answer("Сначала напиши название ИП через /start")
+        return
+
+    state.last_photo_id = message.photo[-1].file_id
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=pvz, callback_data=f"pvz:{pvz}")]
+            for pvz in PVZ_LIST
+        ]
     )
-    sessions[m.message_id] = s
-    sent = await m.reply(
-        "Выберите один или несколько ПВЗ, затем нажмите «Готово».",
-        reply_markup=build_keyboard(s),
+
+    await message.answer("Выбери адрес ПВЗ:", reply_markup=keyboard)
+
+    if DELETE_ORIGINAL_PHOTO:
+        await message.delete()
+
+# ===== ОБРАБОТКА ВЫБОРА ПВЗ =====
+
+@dp.callback_query(F.data.startswith("pvz:"))
+async def pvz_selected(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    state = suppliers.get(user_id)
+
+    if not state or not state.last_photo_id:
+        await callback.answer("Ошибка состояния", show_alert=True)
+        return
+
+    pvz = callback.data.split(":", 1)[1]
+
+    if RETURNS_CHAT_ID is None:
+        await callback.answer("RETURNS_CHAT_ID не задан", show_alert=True)
+        return
+
+    caption = (
+        f"📦 *Возврат*\n\n"
+        f"👤 Поставщик: *{state.name}*\n"
+        f"📍 Адрес: *{pvz}*"
     )
-    s.keyboard_msg_id = sent.message_id
 
-@dp.callback_query(F.data.startswith(("sel:", "done:", "cancel:")))
-async def on_callbacks(cq: CallbackQuery):
-    try:
-        action, rest = cq.data.split(":", 1)
-        if action == "sel":
-            idx_str, origin_id_str = rest.split(":")
-        else:
-            origin_id_str = rest
-        origin_id = int(origin_id_str)
-    except Exception:
-        await cq.answer("Некорректные данные.", show_alert=True)
-        return
+    await bot.send_photo(
+        chat_id=RETURNS_CHAT_ID,
+        photo=state.last_photo_id,
+        caption=caption,
+        parse_mode="Markdown"
+    )
 
-    s = sessions.get(origin_id)
-    if not s:
-        await cq.answer("Сессия не найдена (время истекло или завершена).", show_alert=True)
-        return
+    if DELETE_KEYBOARD_MESSAGE:
+        await callback.message.delete()
 
-    # Только автор исходного изображения может выбирать
-    if cq.from_user.id != s.sender_id:
-        await cq.answer("Только отправитель может выбирать адреса.", show_alert=True)
-        return
+    state.last_photo_id = None
+    await callback.answer("Отправлено ✅")
 
-    if action == "sel":
-        idx = int(idx_str)
-        if idx < 0 or idx >= len(PVZ_LIST):
-            await cq.answer("Такого ПВЗ нет.", show_alert=True)
-            return
-        if idx in s.selected:
-            s.selected.remove(idx)
-        else:
-            s.selected.add(idx)
-        await cq.message.edit_reply_markup(reply_markup=build_keyboard(s))
-        await cq.answer()
-        return
-
-    if action == "cancel":
-        try:
-            await cq.message.edit_text("Выбор отменён.")
-            if DELETE_KEYBOARD and s.keyboard_msg_id:
-                await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
-        except Exception:
-            pass
-        sessions.pop(origin_id, None)
-        await cq.answer("Отменено.")
-        return
-
-    if action == "done":
-        caption = caption_for(s)
-        await cq.bot.send_photo(chat_id=s.chat_id, photo=s.file_id, caption=caption)
-
-        if DELETE_KEYBOARD and s.keyboard_msg_id:
-            await safe_delete(cq.bot, s.chat_id, s.keyboard_msg_id)
-        if DELETE_ORIGINAL:
-            await safe_delete(cq.bot, s.chat_id, s.origin_msg_id)
-
-        sessions.pop(origin_id, None)
-        await cq.answer("Опубликовано.")
-        return
+# ===== ЗАПУСК =====
 
 async def main():
-    bot = Bot(TOKEN)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
-
