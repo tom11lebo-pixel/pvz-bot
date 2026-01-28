@@ -21,7 +21,7 @@ if not TOKEN:
     raise RuntimeError("Переменная окружения TOKEN не задана")
 
 # 👉 сюда потом вставишь chat_id группы Возвраты
-RETURNS_CHAT_ID = -1002768922543  # например: -1001234567890
+RETURNS_CHAT_ID = int(os.getenv("RETURNS_CHAT_ID"))  # например: -1001234567890
 
 DELETE_ORIGINAL_PHOTO = True
 DELETE_KEYBOARD_MESSAGE = True
@@ -152,3 +152,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
