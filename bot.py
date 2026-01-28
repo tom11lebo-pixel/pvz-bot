@@ -1,155 +1,211 @@
-# bot.py
 import os
 import asyncio
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, Set
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
 from aiogram.types import (
     Message,
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    ContentType
+    ContentType,
 )
+from aiogram.filters import Command
 
-# ===== НАСТРОЙКИ =====
+import gspread
+from google.oauth2.service_account import Credentials
+
+# ================== НАСТРОЙКИ ==================
 
 TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise RuntimeError("Переменная окружения TOKEN не задана")
+RETURNS_CHAT_ID = int(os.getenv("RETURNS_CHAT_ID"))
 
-# 👉 сюда потом вставишь chat_id группы Возвраты
-RETURNS_CHAT_ID = int(os.getenv("RETURNS_CHAT_ID"))  # например: -1001234567890
-
-DELETE_ORIGINAL_PHOTO = True
-DELETE_KEYBOARD_MESSAGE = True
+if not TOKEN or not RETURNS_CHAT_ID:
+    raise RuntimeError("TOKEN или RETURNS_CHAT_ID не заданы")
 
 PVZ_LIST = [
     "Яхромская 3",
-    "Яхромская 2",
     "Учинская 3 к1",
     "Лобненская 4",
-    "Дмит ш 107 к3",
-    "Дмит ш 103",
-    "Дмит ш 107 к2",
-    "Дмит ш 127 к1",
-    "Норд Хаус",
-    "С Ковалевской 8",
+    "Яхромская 2",
+    "Дмитровское шоссе 103",
+    "Дмитровское шоссе 107 к2",
+    "Дмитровское шоссе 127 к1",
+    "Софьи Ковалевской 8",
+    "Дмитровское шоссе 100 с2",
 ]
 
-# ===== ХРАНИЛИЩЕ СОСТОЯНИЯ (ПРОСТО И НАДЁЖНО) =====
+# ================== GOOGLE SHEETS ==================
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+
+creds = Credentials.from_service_account_file(
+    "google_credentials.json", scopes=SCOPES
+)
+gs = gspread.authorize(creds)
+sheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
+
+# ================== СОСТОЯНИЕ ==================
 
 @dataclass
 class SupplierState:
-    name: str | None = None
-    last_photo_id: str | None = None
+    company: str | None = None
+    photo_file_id: str | None = None
+    selected_pvz: Set[str] = field(default_factory=set)
 
-suppliers: Dict[int, SupplierState] = {}
+users: Dict[int, SupplierState] = {}
 
-# ===== ИНИЦИАЛИЗАЦИЯ =====
+# ================== INIT ==================
 
-bot = Bot(token=TOKEN)
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
-# ===== КОМАНДЫ =====
-
-@dp.message(F.text.startswith("/getid"))
-async def get_chat_id(message: Message):
-    await message.reply(f"Chat ID: {message.chat.id}")
+# ================== START ==================
 
 @dp.message(Command("start"))
 async def start(message: Message):
-    suppliers[message.from_user.id] = SupplierState()
-    await message.answer(
-        "Привет 👋\n\n"
-        "Напиши, пожалуйста, *название твоего ИП* одним сообщением.",
-        parse_mode="Markdown"
-    )
-
-# ===== ПОЛУЧЕНИЕ ИМЕНИ ПОСТАВЩИКА =====
-
-@dp.message(F.text & ~F.text.startswith("/"))
-async def set_supplier_name(message: Message):
-    state = suppliers.get(message.from_user.id)
-    if not state:
+    if message.chat.type != "private":
         return
 
-    if state.name is None:
-        state.name = message.text.strip()
-        await message.answer(
-            f"Отлично, *{state.name}* ✅\n\n"
-            "Теперь отправь фото ШК возврата.",
-            parse_mode="Markdown"
-        )
+    users[message.from_user.id] = SupplierState()
+    await message.answer(
+        "Привет 👋\n\n"
+        "Я бот Brendwall Logistic"
+        "В чат отправляй *фото* шк возвратов, когда они появятся"
+        "Напиши *название своего ИП* одним сообщением.",
+        parse_mode="Markdown",
+    )
 
-# ===== ПОЛУЧЕНИЕ ФОТО =====
+# ================== ИМЯ ПОСТАВЩИКА ==================
+
+@dp.message(F.text & ~F.text.startswith("/"))
+async def set_company(message: Message):
+    if message.chat.type != "private":
+        return
+
+    state = users.get(message.from_user.id)
+    if not state or state.company:
+        return
+
+    state.company = message.text.strip()
+    await message.answer(
+        f"Отлично ✅\n"
+        f"ИП: *{state.company}*\n\n"
+        "Теперь отправь *фото* штрихкода возврата.",
+        parse_mode="Markdown",
+    )
+
+# ================== ФОТО ==================
 
 @dp.message(F.content_type == ContentType.PHOTO)
 async def handle_photo(message: Message):
-    user_id = message.from_user.id
-    state = suppliers.get(user_id)
-
-    if not state or not state.name:
-        await message.answer("Сначала напиши название ИП через /start")
+    if message.chat.type != "private":
         return
 
-    state.last_photo_id = message.photo[-1].file_id
+    state = users.get(message.from_user.id)
+    if not state or not state.company:
+        await message.answer("Сначала напиши название ИП/ООО через /start")
+        return
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=pvz, callback_data=f"pvz:{pvz}")]
-            for pvz in PVZ_LIST
-        ]
+    state.photo_file_id = message.photo[-1].file_id
+    state.selected_pvz.clear()
+
+    await message.answer(
+        "Выбери один или несколько ПВЗ, затем нажми «ОК»",
+        reply_markup=build_pvz_keyboard(state),
     )
 
-    await message.answer("Выбери адрес ПВЗ:", reply_markup=keyboard)
+# ================== КНОПКИ ==================
 
-    if DELETE_ORIGINAL_PHOTO:
-        await message.delete()
+def build_pvz_keyboard(state: SupplierState) -> InlineKeyboardMarkup:
+    keyboard = []
 
-# ===== ОБРАБОТКА ВЫБОРА ПВЗ =====
+    for pvz in PVZ_LIST:
+        mark = "☑️" if pvz in state.selected_pvz else "⬜️"
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{mark} {pvz}",
+                callback_data=f"pvz:{pvz}",
+            )
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(text="✅ ОК", callback_data="confirm")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# ================== ВЫБОР ПВЗ ==================
 
 @dp.callback_query(F.data.startswith("pvz:"))
-async def pvz_selected(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    state = suppliers.get(user_id)
-
-    if not state or not state.last_photo_id:
-        await callback.answer("Ошибка состояния", show_alert=True)
+async def toggle_pvz(callback: CallbackQuery):
+    state = users.get(callback.from_user.id)
+    if not state:
         return
 
-    pvz = callback.data.split(":", 1)[1]
+    pvz = callback.data.replace("pvz:", "")
+    if pvz in state.selected_pvz:
+        state.selected_pvz.remove(pvz)
+    else:
+        state.selected_pvz.add(pvz)
 
-    if RETURNS_CHAT_ID is None:
-        await callback.answer("RETURNS_CHAT_ID не задан", show_alert=True)
+    await callback.message.edit_reply_markup(
+        reply_markup=build_pvz_keyboard(state)
+    )
+    await callback.answer()
+
+# ================== ПОДТВЕРЖДЕНИЕ ==================
+
+@dp.callback_query(F.data == "confirm")
+async def confirm(callback: CallbackQuery):
+    state = users.get(callback.from_user.id)
+    if not state or not state.selected_pvz:
+        await callback.answer("Выберите хотя бы один ПВЗ", show_alert=True)
         return
+
+    pvz_text = "\n".join(f"• {p}" for p in state.selected_pvz)
 
     caption = (
         f"📦 *Возврат*\n\n"
-        f"👤 Поставщик: *{state.name}*\n"
-        f"📍 Адрес: *{pvz}*"
+        f"🏷 Клиент: *{state.company}*\n"
+        f"📍 ПВЗ:\n{pvz_text}"
     )
 
     await bot.send_photo(
-        chat_id=RETURNS_CHAT_ID,
-        photo=state.last_photo_id,
+        RETURNS_CHAT_ID,
+        photo=state.photo_file_id,
         caption=caption,
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
 
-    if DELETE_KEYBOARD_MESSAGE:
-        await callback.message.delete()
+    # ===== логирование =====
+    sheet.append_row([
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        state.company,
+        callback.from_user.full_name,
+        ", ".join(state.selected_pvz),
+        state.photo_file_id,
+    ])
 
-    state.last_photo_id = None
-    await callback.answer("Отправлено ✅")
+    await callback.message.answer(
+        "✅ Штрихкод возврата доставлен.\n"
+        "Спасибо!"
+    )
 
-# ===== ЗАПУСК =====
+    await callback.message.delete()
+
+    state.photo_file_id = None
+    state.selected_pvz.clear()
+
+    await callback.answer()
+
+# ================== RUN ==================
 
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
