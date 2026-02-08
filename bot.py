@@ -196,7 +196,6 @@ if state.photo_caption:
         f"{state.photo_caption}"
     )
 
-
     await bot.send_photo(
         RETURNS_CHAT_ID,
         photo=state.photo_file_id,
@@ -233,6 +232,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
