@@ -192,7 +192,7 @@ async def confirm(callback: CallbackQuery):
 
     if state.photo_caption:
         caption += (
-            f"\n\n📝 *Комментарий поставщика:*\n"
+            f"\n\n📝 *Комментарий:*\n"
             f"{state.photo_caption}"
         )
 
@@ -234,6 +234,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
