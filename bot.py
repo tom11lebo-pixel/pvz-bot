@@ -184,17 +184,17 @@ async def confirm(callback: CallbackQuery):
 
     pvz_text = "\n".join(f"• {p}" for p in state.selected_pvz)
 
-caption = (
-    f"📦 *Возврат*\n\n"
-    f"🏷 Клиент: *{state.company}*\n"
-    f"📍 ПВЗ:\n{pvz_text}"
-)
-
-if state.photo_caption:
-    caption += (
-        f"\n\n📝 *Комментарий:*\n"
-        f"{state.photo_caption}"
+    caption = (
+        f"📦 *Возврат*\n\n"
+        f"🏷 Клиент: *{state.company}*\n"
+        f"📍 ПВЗ:\n{pvz_text}"
     )
+
+    if state.photo_caption:
+        caption += (
+            f"\n\n📝 *Комментарий поставщика:*\n"
+            f"{state.photo_caption}"
+        )
 
     await bot.send_photo(
         RETURNS_CHAT_ID,
@@ -210,6 +210,7 @@ if state.photo_caption:
         callback.from_user.full_name,
         ", ".join(state.selected_pvz),
         state.photo_file_id,
+        state.photo_caption,
     ])
 
     await callback.message.answer(
@@ -225,6 +226,7 @@ if state.photo_caption:
 
     await callback.answer()
 
+
 # ================== RUN ==================
 
 async def main():
@@ -232,6 +234,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
