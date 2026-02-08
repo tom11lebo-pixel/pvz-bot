@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Dict, Set
 from datetime import datetime
@@ -21,9 +22,11 @@ from google.oauth2.service_account import Credentials
 
 TOKEN = os.getenv("TOKEN")
 RETURNS_CHAT_ID = int(os.getenv("RETURNS_CHAT_ID"))
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+google_creds_json = os.getenv("GOOGLE_CREDS_JSON")
 
-if not TOKEN or not RETURNS_CHAT_ID:
-    raise RuntimeError("TOKEN или RETURNS_CHAT_ID не заданы")
+if not TOKEN or not RETURNS_CHAT_ID or not GOOGLE_SHEET_ID or not google_creds_json:
+    raise RuntimeError("Не заданы обязательные переменные окружения")
 
 PVZ_LIST = [
     "Яхромская 3",
@@ -40,16 +43,6 @@ PVZ_LIST = [
 # ================== GOOGLE SHEETS ==================
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-
-import json
-from google.oauth2.service_account import Credentials
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-google_creds_json = os.getenv("GOOGLE_CREDS_JSON")
-if not google_creds_json:
-    raise RuntimeError("GOOGLE_CREDS_JSON not set in environment")
 
 creds = Credentials.from_service_account_info(
     json.loads(google_creds_json),
@@ -58,6 +51,24 @@ creds = Credentials.from_service_account_info(
 
 gs = gspread.authorize(creds)
 sheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
+suppliers_sheet = gs.open_by_key(GOOGLE_SHEET_ID).worksheet("suppliers")
+
+# ================== SUPPLIERS STORAGE ==================
+
+def get_supplier_company(user_id: int) -> str | None:
+    records = suppliers_sheet.get_all_records()
+    for row in records:
+        if int(row["user_id"]) == user_id:
+            return row["company"]
+    return None
+
+
+def save_supplier(user_id: int, company: str):
+    suppliers_sheet.append_row([
+        user_id,
+        company,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ])
 
 # ================== СОСТОЯНИЕ ==================
 
@@ -82,16 +93,27 @@ async def start(message: Message):
     if message.chat.type != "private":
         return
 
-    users[message.from_user.id] = SupplierState()
-    await message.answer(
-        "Привет 👋\n\n"
-        "Я бот *Brendwall Logistic* 📦\n\n"
-        "Сюда можно отправлять *фото штрихкодов возвратов*, как только они появятся.\n"
-        "Я передам всю информацию нашей команде.\n\n"
-       "Для начала, пожалуйста, напиши *название своего ИП/ООО* одним сообщением. Это нужно сделать один раз.\n\n"
-        "_Пример: ИП Иванов И.И._",
-        parse_mode="Markdown",
-    )
+    user_id = message.from_user.id
+    company = get_supplier_company(user_id)
+
+    state = SupplierState(company=company)
+    users[user_id] = state
+
+    if company:
+        await message.answer(
+            f"С возвращением 👋\n\n"
+            f"🏷 Твоя компания: *{company}*\n\n"
+            "Можешь сразу отправлять *фото штрихкодов возвратов* 📦",
+            parse_mode="Markdown",
+        )
+    else:
+        await message.answer(
+            "Привет 👋\n\n"
+            "Я бот *Brendwall Logistic* 📦\n\n"
+            "Для начала, пожалуйста, напиши *название своего ИП/ООО* одним сообщением.\n\n"
+            "_Пример: ИП Иванов И.И._",
+            parse_mode="Markdown",
+        )
 
 # ================== ИМЯ ПОСТАВЩИКА ==================
 
@@ -105,11 +127,12 @@ async def set_company(message: Message):
         return
 
     state.company = message.text.strip()
+    save_supplier(message.from_user.id, state.company)
+
     await message.answer(
         f"Отлично ✅\n"
         f"ИП: *{state.company}*\n\n"
-        "Теперь отправь *фото* штрихкода возврата.\n"
-        "И в дальнейшем отправляй *только фото* штрихкода в чат.",
+        "Теперь отправь *фото* штрихкода возврата.",
         parse_mode="Markdown",
     )
 
@@ -121,8 +144,14 @@ async def handle_photo(message: Message):
         return
 
     state = users.get(message.from_user.id)
-    if not state or not state.company:
-        await message.answer("Сначала напиши название ИП/ООО через /start")
+    if not state:
+        return
+
+    if not state.company:
+        await message.answer(
+            "Пожалуйста, сначала напиши *название своего ИП/ООО*.",
+            parse_mode="Markdown"
+        )
         return
 
     state.photo_file_id = message.photo[-1].file_id
@@ -191,10 +220,7 @@ async def confirm(callback: CallbackQuery):
     )
 
     if state.photo_caption:
-        caption += (
-            f"\n\n📝 *Комментарий:*\n"
-            f"{state.photo_caption}"
-        )
+        caption += f"\n\n📝 *Комментарий:*\n{state.photo_caption}"
 
     await bot.send_photo(
         RETURNS_CHAT_ID,
@@ -203,7 +229,6 @@ async def confirm(callback: CallbackQuery):
         parse_mode="Markdown",
     )
 
-    # ===== логирование =====
     sheet.append_row([
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         state.company,
@@ -213,11 +238,7 @@ async def confirm(callback: CallbackQuery):
         state.photo_caption,
     ])
 
-    await callback.message.answer(
-        "✅ Штрихкод возврата доставлен.\n"
-        "Спасибо!"
-    )
-
+    await callback.message.answer("✅ Штрихкод возврата доставлен. Спасибо!")
     await callback.message.delete()
 
     state.photo_file_id = None
@@ -226,7 +247,6 @@ async def confirm(callback: CallbackQuery):
 
     await callback.answer()
 
-
 # ================== RUN ==================
 
 async def main():
@@ -234,11 +254,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
-
-
-
-
