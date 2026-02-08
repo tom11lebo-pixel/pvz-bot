@@ -65,6 +65,7 @@ sheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
 class SupplierState:
     company: str | None = None
     photo_file_id: str | None = None
+    photo_caption: str | None = None
     selected_pvz: Set[str] = field(default_factory=set)
 
 users: Dict[int, SupplierState] = {}
@@ -125,6 +126,7 @@ async def handle_photo(message: Message):
         return
 
     state.photo_file_id = message.photo[-1].file_id
+    state.photo_caption = message.caption or ""
     state.selected_pvz.clear()
 
     await message.answer(
@@ -187,6 +189,12 @@ async def confirm(callback: CallbackQuery):
         f"🏷 Клиент: *{state.company}*\n"
         f"📍 ПВЗ:\n{pvz_text}"
     )
+    
+    if state.photo_caption:   # ← ДОБАВЛЕНО
+    caption += (
+        f"\n\n📝 *Комментарий:*\n"
+        f"{state.photo_caption}"
+    )
 
     await bot.send_photo(
         RETURNS_CHAT_ID,
@@ -212,6 +220,7 @@ async def confirm(callback: CallbackQuery):
     await callback.message.delete()
 
     state.photo_file_id = None
+    state.photo_caption = None
     state.selected_pvz.clear()
 
     await callback.answer()
@@ -223,6 +232,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
