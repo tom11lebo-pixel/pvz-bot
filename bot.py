@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Set
 from datetime import datetime
 
+from aiohttp import web
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
@@ -50,8 +52,10 @@ creds = Credentials.from_service_account_info(
 )
 
 gs = gspread.authorize(creds)
-sheet = gs.open_by_key(GOOGLE_SHEET_ID).sheet1
-suppliers_sheet = gs.open_by_key(GOOGLE_SHEET_ID).worksheet("suppliers")
+spreadsheet = gs.open_by_key(GOOGLE_SHEET_ID)
+
+sheet = spreadsheet.sheet1
+suppliers_sheet = spreadsheet.worksheet("suppliers")
 
 # ================== SUPPLIERS STORAGE ==================
 
@@ -86,6 +90,23 @@ users: Dict[int, SupplierState] = {}
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
+# ================== WEB SERVER ДЛЯ RENDER FREE ==================
+
+async def healthcheck(request):
+    return web.Response(text="Brendwall Logistic bot is running")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", healthcheck)
+
+    port = int(os.getenv("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 # ================== START ==================
 
 @dp.message(Command("start"))
@@ -110,7 +131,9 @@ async def start(message: Message):
         await message.answer(
             "Привет 👋\n\n"
             "Я бот *Brendwall Logistic* 📦\n\n"
-            "Для начала, пожалуйста, напиши *название своего ИП/ООО* одним сообщением.\n\n"
+            "Сюда можно отправлять *фото штрихкодов возвратов*, как только они появятся.\n"
+            "Я передам всю информацию нашей команде.\n\n"
+            "Для начала, пожалуйста, напиши *название своего ИП/ООО* одним сообщением. Это нужно сделать один раз.\n\n"
             "_Пример: ИП Иванов И.И._",
             parse_mode="Markdown",
         )
@@ -122,16 +145,23 @@ async def set_company(message: Message):
     if message.chat.type != "private":
         return
 
-    state = users.get(message.from_user.id)
-    if not state or state.company:
+    user_id = message.from_user.id
+    state = users.get(user_id)
+
+    if not state:
+        company = get_supplier_company(user_id)
+        state = SupplierState(company=company)
+        users[user_id] = state
+
+    if state.company:
         return
 
     state.company = message.text.strip()
-    save_supplier(message.from_user.id, state.company)
+    save_supplier(user_id, state.company)
 
     await message.answer(
         f"Отлично ✅\n"
-        f"ИП: *{state.company}*\n\n"
+        f"ИП/ООО: *{state.company}*\n\n"
         "Теперь отправь *фото* штрихкода возврата.",
         parse_mode="Markdown",
     )
@@ -143,9 +173,13 @@ async def handle_photo(message: Message):
     if message.chat.type != "private":
         return
 
-    state = users.get(message.from_user.id)
+    user_id = message.from_user.id
+    state = users.get(user_id)
+
     if not state:
-        return
+        company = get_supplier_company(user_id)
+        state = SupplierState(company=company)
+        users[user_id] = state
 
     if not state.company:
         await message.answer(
@@ -207,7 +241,12 @@ async def toggle_pvz(callback: CallbackQuery):
 @dp.callback_query(F.data == "confirm")
 async def confirm(callback: CallbackQuery):
     state = users.get(callback.from_user.id)
-    if not state or not state.selected_pvz:
+
+    if not state or not state.photo_file_id:
+        await callback.answer("Сначала отправьте фото штрихкода", show_alert=True)
+        return
+
+    if not state.selected_pvz:
         await callback.answer("Выберите хотя бы один ПВЗ", show_alert=True)
         return
 
@@ -223,7 +262,7 @@ async def confirm(callback: CallbackQuery):
         caption += f"\n\n📝 *Комментарий:*\n{state.photo_caption}"
 
     await bot.send_photo(
-        RETURNS_CHAT_ID,
+        chat_id=RETURNS_CHAT_ID,
         photo=state.photo_file_id,
         caption=caption,
         parse_mode="Markdown",
@@ -250,6 +289,7 @@ async def confirm(callback: CallbackQuery):
 # ================== RUN ==================
 
 async def main():
+    await start_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
